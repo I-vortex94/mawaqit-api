@@ -35,5 +35,5 @@ def get_month_calendar(masjid_id: str, month_number: int):
     return jsonable_encoder(month_dict)
 
 @router.get("/{masjid_id}/trmnl", summary="Formatted data for TRMNL")
-def get_trmnl_format(masjid: str):
+def get_trmnl_format(masjid_id: str):
     return script.get_trmnl_data(masjid_id)
