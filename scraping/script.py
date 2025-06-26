@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from fastapi import HTTPException
 from config.redisClient import redisClient
 from redis.exceptions import RedisError
+from datetime import datetime, timedelta
 
 
 import json
@@ -75,43 +76,40 @@ def get_month(masjid_id, month_number):
     ]
     return prayer_times_list
 
-def mawaqit_trmnl(masjid_id):
-    client = AsyncMawaqitClient()
-    await client.get_api_token()
-    mosques = await client.fetch_mosques_by_keyword(masjid_id)
-    if not mosques:
-        raise HTTPException(status_code=404, detail="Mosquée introuvable")
-    client.mosque = mosques[0]["uuid"]
-    data = await client.fetch_prayer_times()
-    await client.close()
+def get_trmnl_data(masjid_id):
+    confData = fetch_mawaqit(masjid_id)
+    today = datetime.now().day
+    tomorrow = (datetime.now() + timedelta(days=1)).day
 
-    # Transforme le calendrier en structure souhaitée
-    today = date.today()
-    tomorrow = today + timedelta(days=1)
-    def fmt(day):
-        cal = data["calendar"].get(day.isoformat(), {})
-        iq = data["iqama_calendar"].get(day.isoformat(), {})
-        return {
-            "time": cal.get("time", ""),
-            "iqama": iq.get("time", "")
-        }
+    today_raw = confData["calendar"][datetime.now().month - 1].get(str(today))
+    tomorrow_raw = confData["calendar"][datetime.now().month - 1].get(str(tomorrow))
+    
+    iqama_times = confData["times"]
+
+    # Si un élément comme "caca" est au début, on le saute
+    if not ":" in today_raw[0]:
+        today_raw = today_raw[1:]
+    if not ":" in tomorrow_raw[0]:
+        tomorrow_raw = tomorrow_raw[1:]
+
+    prayers = ["fajr", "dohr", "asr", "maghreb", "isha"]
+    today_times = dict(zip(prayers, today_raw))
+    tomorrow_times = dict(zip(prayers, tomorrow_raw))
+
+    iqama_delay = {}
+    for i, name in enumerate(prayers):
+        try:
+            iqama = datetime.strptime(iqama_times[i], "%H:%M")
+            adhan = datetime.strptime(today_raw[i + 1 if not ":" in confData["calendar"][datetime.now().month - 1][str(today)][0] else i], "%H:%M")
+            delta = int((iqama - adhan).total_seconds() / 60)
+            iqama_delay[name] = delta
+        except Exception:
+            iqama_delay[name] = None
+
     return {
-        "today": {
-            "hijriDate": data.get("hijriDate", ""),
-            "Fajr": fmt(today).get("Fajr", {}),
-            "Shuruk": fmt(today).get("Shuruk", {}),
-            "Dhuhr": fmt(today).get("Dhuhr", {}),
-            "Asr": fmt(today).get("Asr", {}),
-            "Maghrib": fmt(today).get("Maghrib", {}),
-            "Isha": fmt(today).get("Isha", {})
-        },
-        "tomorrow": {
-            "Fajr": fmt(tomorrow).get("Fajr", {}),
-            "Shuruk": fmt(tomorrow).get("Shuruk", {}),
-            "Dhuhr": fmt(tomorrow).get("Dhuhr", {}),
-            "Asr": fmt(tomorrow).get("Asr", {}),
-            "Maghrib": fmt(tomorrow).get("Maghrib", {}),
-            "Isha": fmt(tomorrow).get("Isha", {})
-        },
-        "jumua": data.get("jumua", "")
+        "today": today_times,
+        "tomorrow": tomorrow_times,
+        "hijridate": confData.get("hijriDate", ""),
+        "jumua": confData.get("jumua", ""),
+        "iqama_delay": iqama_delay
     }
