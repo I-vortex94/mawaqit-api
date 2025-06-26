@@ -4,7 +4,7 @@ from fastapi import HTTPException
 from config.redisClient import redisClient
 from redis.exceptions import RedisError
 from datetime import datetime, timedelta
-
+import calendar as cal_module
 
 import json
 import re
@@ -76,10 +76,9 @@ def get_month(masjid_id, month_number):
     ]
     return prayer_times_list
 
-from datetime import datetime, timedelta
-
 def get_trmnl_data(masjid_id):
     confData = fetch_mawaqit(masjid_id)
+
     now = datetime.now()
     today_day = str(now.day)
     tomorrow_day = str((now + timedelta(days=1)).day)
@@ -88,34 +87,57 @@ def get_trmnl_data(masjid_id):
     calendar = confData["calendar"][month_index]
     iqama_times = confData["times"]
     shuruk = confData.get("shuruq", "")
-    hijri = confData.get("hijriDate", "")
     jumua = confData.get("jumua", "")
 
+    # === utilitaire : nettoyer les listes ===
     def clean(prayer_list):
-        # Ignore valeurs non horaires type "caca"
         return [h for h in prayer_list if ":" in h]
 
-    today_raw = clean(calendar.get(today_day, []))
-    tomorrow_raw = clean(calendar.get(tomorrow_day, []))
+    raw_today = clean(calendar.get(today_day, []))
+    raw_tomorrow = clean(calendar.get(tomorrow_day, []))
 
-    prayers = ["fajr", "dohr", "asr", "maghreb", "isha"]
-    today = dict(zip(prayers, today_raw))
-    tomorrow = dict(zip(prayers, tomorrow_raw))
+    if len(raw_today) < 6 or len(iqama_times) < 5:
+        raise HTTPException(status_code=500, detail="Données de prière insuffisantes ou mal formées.")
 
+    prayers = ["fajr", "shuruk", "dohr", "asr", "maghreb", "isha"]
+    iqama_labels = ["fajr", "dohr", "asr", "maghreb", "isha"]
+
+    # assignation correcte
+    today = dict(zip(prayers, raw_today))
+    tomorrow = dict(zip(prayers, raw_tomorrow))
+
+    # calcul du delay iqama = iqama - adhan
     iqama_delay = {}
-    for i, name in enumerate(prayers):
+    for i, name in enumerate(iqama_labels):
         try:
-            iqama = datetime.strptime(iqama_times[i], "%H:%M")
             adhan = datetime.strptime(today[name], "%H:%M")
-            delta = int((iqama - adhan).total_seconds() / 60)
-            iqama_delay[name] = delta
+            iqama = datetime.strptime(iqama_times[i], "%H:%M")
+            delay = int((iqama - adhan).total_seconds() / 60)
+            if delay < 0:
+                delay += 24 * 60
+            iqama_delay[name] = delay
         except:
             iqama_delay[name] = None
 
+    # hijri fallback auto
+    hijri = confData.get("hijriDate")
+    if not hijri:
+        hijri = guess_hijri()
+
     return {
-        "today": today,
-        "tomorrow": tomorrow,
+        "today": {k: today[k] for k in iqama_labels},
+        "tomorrow": {k: tomorrow.get(k, "") for k in iqama_labels},
         "hijridate": hijri,
         "jumua": jumua,
         "iqama_delay": iqama_delay
     }
+
+# Hijri date fallback basic generator (can be replaced by official lib)
+def guess_hijri():
+    try:
+        import hijri_converter
+        today = datetime.today()
+        h = hijri_converter.Gregorian(today.year, today.month, today.day).to_hijri()
+        return f"{h.day} {h.month_name('fr')} {h.year}"
+    except:
+        return "Hijri inconnu"
