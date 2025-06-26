@@ -4,7 +4,6 @@ from fastapi import HTTPException
 from config.redisClient import redisClient
 from redis.exceptions import RedisError
 from datetime import datetime, timedelta
-import calendar as cal_module
 
 import json
 import re
@@ -110,5 +109,6 @@ def get_trmnl_data(masjid_id):
     return {
         "today": {k: today[k] for k in iqama_labels},
         "tomorrow": {k: tomorrow.get(k, "") for k in iqama_labels},
+        "shuruk": today.get("shuruk", ""),
         "jumua": jumua,
     }
