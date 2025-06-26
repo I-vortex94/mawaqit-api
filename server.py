@@ -1,23 +1,60 @@
 from flask import Flask, jsonify, request
-import aiohttp, asyncio, os
+import asyncio
+from mawaqit import AsyncMawaqitClient
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
+client = AsyncMawaqitClient()
 
-@app.route('/mawaqit-today')
+async def fetch_prayer_data(slug: str):
+    mosque = await client.get_mosque(slug)
+    today = datetime.now().date()
+    tomorrow = today + timedelta(days=1)
+
+    def format_day(day):
+        prayers = mosque.calendar.get(day.isoformat())
+        iqamas = mosque.iqama_calendar.get(day.isoformat())
+
+        return {
+            "Fajr": {
+                "time": prayers.fajr.strftime("%H:%M"),
+                "iqama": iqamas.fajr.strftime("%H:%M") if iqamas.fajr else ""
+            },
+            "Shuruk": {
+                "time": prayers.sunrise.strftime("%H:%M")
+            },
+            "Dhuhr": {
+                "time": prayers.dhuhr.strftime("%H:%M"),
+                "iqama": iqamas.dhuhr.strftime("%H:%M") if iqamas.dhuhr else ""
+            },
+            "Asr": {
+                "time": prayers.asr.strftime("%H:%M"),
+                "iqama": iqamas.asr.strftime("%H:%M") if iqamas.asr else ""
+            },
+            "Maghrib": {
+                "time": prayers.maghrib.strftime("%H:%M"),
+                "iqama": iqamas.maghrib.strftime("%H:%M") if iqamas.maghrib else ""
+            },
+            "Isha": {
+                "time": prayers.isha.strftime("%H:%M"),
+                "iqama": iqamas.isha.strftime("%H:%M") if iqamas.isha else ""
+            }
+        }
+
+    return {
+        "today": {
+            **format_day(today),
+            "hijriDate": mosque.hijri_date
+        },
+        "tomorrow": format_day(tomorrow),
+        "jumua": mosque.jumua.strftime("%H:%M") if mosque.jumua else ""
+    }
+
+@app.route("/mawaqit-today")
 def prayer_times():
-    url = f"https://mawaqit-api-c9jb.onrender.com/api/v1/mosquee-sahaba-creteil/prayer-times"
-
-    async def get_times():
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as resp:
-                if resp.status != 200:
-                    return {"error": f"API returned status {resp.status}"}
-                return await resp.json()
-
-    data = asyncio.run(get_times())
+    slug = request.args.get("slug", "mosquee-sahaba-creteil")
+    data = asyncio.run(fetch_prayer_data(slug))
     return jsonify(data)
 
-
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=5000)
