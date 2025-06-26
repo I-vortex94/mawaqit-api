@@ -17,7 +17,6 @@ def get_raw_data(masjid_id: str):
     r = script.fetch_mawaqit(masjid_id)
     return {"rawdata": r}
 
-
 @router.get("/{masjid_id}/prayer-times", status_code=200, summary="get the prayer times of the current day", response_model=models.PrayerTimes)
 def get_prayer_times(masjid_id: str):
     prayer_times = script.get_prayer_times_of_the_day(masjid_id)
@@ -34,3 +33,8 @@ def get_year_calendar(masjid_id: str):
 def get_month_calendar(masjid_id: str, month_number: int):
     month_dict = script.get_month(masjid_id, month_number)
     return jsonable_encoder(month_dict)
+
+@router.get("/{masjid_id}/trmnl")
+def get_trmnl_mawaqit(masjid_id: str):
+    trmnl = script.mawaqit_trmnl(masjid_id)
+    return trmnl
