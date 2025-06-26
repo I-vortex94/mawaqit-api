@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: api-mawaqit
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    envVars:
+      - key: REDIS_URL
+        value: ""   # vide = pas de cache Redis, mais OK
