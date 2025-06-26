@@ -74,3 +74,44 @@ def get_month(masjid_id, month_number):
         for prayer in month.values()
     ]
     return prayer_times_list
+
+def mawaqit_trmnl(masjid_id):
+    client = AsyncMawaqitClient()
+    await client.get_api_token()
+    mosques = await client.fetch_mosques_by_keyword(slug)
+    if not mosques:
+        raise HTTPException(status_code=404, detail="Mosquée introuvable")
+    client.mosque = mosques[0]["uuid"]
+    data = await client.fetch_prayer_times()
+    await client.close()
+
+    # Transforme le calendrier en structure souhaitée
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    def fmt(day):
+        cal = data["calendar"].get(day.isoformat(), {})
+        iq = data["iqama_calendar"].get(day.isoformat(), {})
+        return {
+            "time": cal.get("time", ""),
+            "iqama": iq.get("time", "")
+        }
+    return {
+        "today": {
+            "hijriDate": data.get("hijriDate", ""),
+            "Fajr": fmt(today).get("Fajr", {}),
+            "Shuruk": fmt(today).get("Shuruk", {}),
+            "Dhuhr": fmt(today).get("Dhuhr", {}),
+            "Asr": fmt(today).get("Asr", {}),
+            "Maghrib": fmt(today).get("Maghrib", {}),
+            "Isha": fmt(today).get("Isha", {})
+        },
+        "tomorrow": {
+            "Fajr": fmt(tomorrow).get("Fajr", {}),
+            "Shuruk": fmt(tomorrow).get("Shuruk", {}),
+            "Dhuhr": fmt(tomorrow).get("Dhuhr", {}),
+            "Asr": fmt(tomorrow).get("Asr", {}),
+            "Maghrib": fmt(tomorrow).get("Maghrib", {}),
+            "Isha": fmt(tomorrow).get("Isha", {})
+        },
+        "jumua": data.get("jumua", "")
+    }
