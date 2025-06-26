@@ -78,7 +78,7 @@ def get_month(masjid_id, month_number):
 def mawaqit_trmnl(masjid_id):
     client = AsyncMawaqitClient()
     await client.get_api_token()
-    mosques = await client.fetch_mosques_by_keyword(slug)
+    mosques = await client.fetch_mosques_by_keyword(masjid_id)
     if not mosques:
         raise HTTPException(status_code=404, detail="Mosquée introuvable")
     client.mosque = mosques[0]["uuid"]
