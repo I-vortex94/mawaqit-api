@@ -106,38 +106,9 @@ def get_trmnl_data(masjid_id):
     today = dict(zip(prayers, raw_today))
     tomorrow = dict(zip(prayers, raw_tomorrow))
 
-    # calcul du delay iqama = iqama - adhan
-    iqama_delay = {}
-    for i, name in enumerate(iqama_labels):
-        try:
-            adhan = datetime.strptime(today[name], "%H:%M")
-            iqama = datetime.strptime(iqama_times[i], "%H:%M")
-            delay = int((iqama - adhan).total_seconds() / 60)
-            if delay < 0:
-                delay += 24 * 60
-            iqama_delay[name] = delay
-        except:
-            iqama_delay[name] = None
-
-    # hijri fallback auto
-    hijri = confData.get("hijriDate")
-    if not hijri:
-        hijri = guess_hijri()
 
     return {
         "today": {k: today[k] for k in iqama_labels},
         "tomorrow": {k: tomorrow.get(k, "") for k in iqama_labels},
-        "hijridate": hijri,
         "jumua": jumua,
-        "iqama_delay": iqama_delay
     }
-
-# Hijri date fallback basic generator (can be replaced by official lib)
-def guess_hijri():
-    try:
-        import hijri_converter
-        today = datetime.today()
-        h = hijri_converter.Gregorian(today.year, today.month, today.day).to_hijri()
-        return f"{h.day} {h.month_name('fr')} {h.year}"
-    except:
-        return "Hijri inconnu"
