@@ -46,7 +46,7 @@ def fetch_mawaqit(masjid_id:str):
     if r.status_code == 404:
         raise HTTPException(status_code=404, detail=f"{masjid_id} not found") 
 
-def get_trmnl_data(masjid_id):
+def get_prayer_times_of_the_day(masjid_id):
     confData = fetch_mawaqit(masjid_id)
     times = confData["times"]
     sunset = confData["shuruq"]
@@ -75,41 +75,3 @@ def get_month(masjid_id, month_number):
         for prayer in month.values()
     ]
     return prayer_times_list
-
-def get_prayer_times_of_the_day(masjid_id):
-    confData = fetch_mawaqit(masjid_id)
-    today = datetime.now().day
-    tomorrow = (datetime.now() + timedelta(days=1)).day
-
-    today_raw = confData["calendar"][datetime.now().month - 1].get(str(today))
-    tomorrow_raw = confData["calendar"][datetime.now().month - 1].get(str(tomorrow))
-    
-    iqama_times = confData["times"]
-
-    # Si un élément comme "caca" est au début, on le saute
-    if not ":" in today_raw[0]:
-        today_raw = today_raw[1:]
-    if not ":" in tomorrow_raw[0]:
-        tomorrow_raw = tomorrow_raw[1:]
-
-    prayers = ["fajr", "dohr", "asr", "maghreb", "isha"]
-    today_times = dict(zip(prayers, today_raw))
-    tomorrow_times = dict(zip(prayers, tomorrow_raw))
-
-    iqama_delay = {}
-    for i, name in enumerate(prayers):
-        try:
-            iqama = datetime.strptime(iqama_times[i], "%H:%M")
-            adhan = datetime.strptime(today_raw[i + 1 if not ":" in confData["calendar"][datetime.now().month - 1][str(today)][0] else i], "%H:%M")
-            delta = int((iqama - adhan).total_seconds() / 60)
-            iqama_delay[name] = delta
-        except Exception:
-            iqama_delay[name] = None
-
-    return {
-        "today": today_times,
-        "tomorrow": tomorrow_times,
-        "hijridate": confData.get("hijriDate", ""),
-        "jumua": confData.get("jumua", ""),
-        "iqama_delay": iqama_delay
-    }
