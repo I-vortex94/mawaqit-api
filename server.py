@@ -15,14 +15,8 @@ def prayer_times():
                 return await resp.json()
 
     data = asyncio.run(get_times())
-    return jsonify({
-    "Fajr": data.get("Fajr"),
-    "Dhuhr": data.get("Dhuhr"),
-    "Asr": data.get("Asr"),
-    "Maghrib": data.get("Maghrib"),
-    "Isha": data.get("Isha"),
-    "hijri": data.get("hijri", "Non disponible")
-    })
+    return jsonify(data)
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
