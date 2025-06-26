@@ -46,7 +46,7 @@ def fetch_mawaqit(masjid_id:str):
     if r.status_code == 404:
         raise HTTPException(status_code=404, detail=f"{masjid_id} not found") 
 
-def get_prayer_times_of_the_day(masjid_id):
+def get_trmnl_data(masjid_id):
     confData = fetch_mawaqit(masjid_id)
     times = confData["times"]
     sunset = confData["shuruq"]
@@ -76,7 +76,7 @@ def get_month(masjid_id, month_number):
     ]
     return prayer_times_list
 
-def get_trmnl_data(masjid_id):
+def get_prayer_times_of_the_day(masjid_id):
     confData = fetch_mawaqit(masjid_id)
     today = datetime.now().day
     tomorrow = (datetime.now() + timedelta(days=1)).day
