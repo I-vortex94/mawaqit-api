@@ -6,8 +6,8 @@ from datetime import datetime, timedelta
 app = Flask(__name__)
 client = AsyncMawaqitClient()
 
-async def fetch_prayer_data(slug: str):
-    mosque = await client.get_mosque(slug)
+async def fetch_prayer_data():
+    mosque = await client.get_mosque(mosquee-sahaba-creteil)
     today = datetime.now().date()
     tomorrow = today + timedelta(days=1)
 
