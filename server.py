@@ -1,60 +1,48 @@
-from flask import Flask, jsonify, request
+from fastapi import FastAPI, HTTPException
 import asyncio
 from mawaqit import AsyncMawaqitClient
-from datetime import datetime, timedelta
+from datetime import date, timedelta
 
-app = Flask(__name__)
-client = AsyncMawaqitClient()
+app = FastAPI()
 
-async def fetch_prayer_data():
-    mosque = await client.get_mosque(mosquee-sahaba-creteil)
-    today = datetime.now().date()
+@app.get("/mawaqit-today")
+async def mawaqit_today(slug: str = "mosquee-sahaba-creteil"):
+    client = AsyncMawaqitClient()
+    await client.get_api_token()
+    mosques = await client.fetch_mosques_by_keyword(slug)
+    if not mosques:
+        raise HTTPException(status_code=404, detail="Mosquée introuvable")
+    client.mosque = mosques[0]["uuid"]
+    data = await client.fetch_prayer_times()
+    await client.close()
+
+    # Transforme le calendrier en structure souhaitée
+    today = date.today()
     tomorrow = today + timedelta(days=1)
-
-    def format_day(day):
-        prayers = mosque.calendar.get(day.isoformat())
-        iqamas = mosque.iqama_calendar.get(day.isoformat())
-
+    def fmt(day):
+        cal = data["calendar"].get(day.isoformat(), {})
+        iq = data["iqama_calendar"].get(day.isoformat(), {})
         return {
-            "Fajr": {
-                "time": prayers.fajr.strftime("%H:%M"),
-                "iqama": iqamas.fajr.strftime("%H:%M") if iqamas.fajr else ""
-            },
-            "Shuruk": {
-                "time": prayers.sunrise.strftime("%H:%M")
-            },
-            "Dhuhr": {
-                "time": prayers.dhuhr.strftime("%H:%M"),
-                "iqama": iqamas.dhuhr.strftime("%H:%M") if iqamas.dhuhr else ""
-            },
-            "Asr": {
-                "time": prayers.asr.strftime("%H:%M"),
-                "iqama": iqamas.asr.strftime("%H:%M") if iqamas.asr else ""
-            },
-            "Maghrib": {
-                "time": prayers.maghrib.strftime("%H:%M"),
-                "iqama": iqamas.maghrib.strftime("%H:%M") if iqamas.maghrib else ""
-            },
-            "Isha": {
-                "time": prayers.isha.strftime("%H:%M"),
-                "iqama": iqamas.isha.strftime("%H:%M") if iqamas.isha else ""
-            }
+            "time": cal.get("time", ""),
+            "iqama": iq.get("time", "")
         }
-
     return {
         "today": {
-            **format_day(today),
-            "hijriDate": mosque.hijri_date
+            "hijriDate": data.get("hijriDate", ""),
+            "Fajr": fmt(today).get("Fajr", {}),
+            "Shuruk": fmt(today).get("Shuruk", {}),
+            "Dhuhr": fmt(today).get("Dhuhr", {}),
+            "Asr": fmt(today).get("Asr", {}),
+            "Maghrib": fmt(today).get("Maghrib", {}),
+            "Isha": fmt(today).get("Isha", {})
         },
-        "tomorrow": format_day(tomorrow),
-        "jumua": mosque.jumua.strftime("%H:%M") if mosque.jumua else ""
+        "tomorrow": {
+            "Fajr": fmt(tomorrow).get("Fajr", {}),
+            "Shuruk": fmt(tomorrow).get("Shuruk", {}),
+            "Dhuhr": fmt(tomorrow).get("Dhuhr", {}),
+            "Asr": fmt(tomorrow).get("Asr", {}),
+            "Maghrib": fmt(tomorrow).get("Maghrib", {}),
+            "Isha": fmt(tomorrow).get("Isha", {})
+        },
+        "jumua": data.get("jumua", "")
     }
-
-@app.route("/mawaqit-today")
-def prayer_times():
-    slug = request.args.get("slug", "mosquee-sahaba-creteil")
-    data = asyncio.run(fetch_prayer_data(slug))
-    return jsonify(data)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
