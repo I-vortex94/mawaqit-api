@@ -75,40 +75,101 @@ def get_month(masjid_id, month_number):
     ]
     return prayer_times_list
 
-def get_trmnl_data(masjid_id):
-    confData = fetch_mawaqit(masjid_id)
+import imaplib
+import email
+import os
+import re
+from email.header import decode_header
 
-    now = datetime.now()
-    today_day = str(now.day)
-    tomorrow_day = str((now + timedelta(days=1)).day)
-    month_index = now.month - 1
+EMAIL_USER = os.environ.get("EMAIL_USER")
+EMAIL_PASS = os.environ.get("EMAIL_PASS")
 
-    calendar = confData["calendar"][month_index]
-    iqama_times = confData["times"]
-    shuruk = confData.get("shuruq", "")
-    jumua = confData.get("jumua", "")
+def normalize_linebreaks(text):
+    text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
+    text = re.sub(r' {2,}', ' ', text)
+    return text
 
-    # === utilitaire : nettoyer les listes ===
-    def clean(prayer_list):
-        return [h for h in prayer_list if ":" in h]
+def clean_text(text):
+    text = text.replace('*', '')
+    text = re.sub(r'(\n){1,5}$', '', text.strip(), flags=re.MULTILINE)
+    return text
 
-    raw_today = clean(calendar.get(today_day, []))
-    raw_tomorrow = clean(calendar.get(tomorrow_day, []))
+def extract_parts(text):
+    text = text.strip().replace('\r', '')
+    lines = text.split('\n')
+    lines = [line for line in lines if not re.fullmatch(r'[*\s\-_=~#]+', line.strip())]
 
-    if len(raw_today) < 6 or len(iqama_times) < 5:
-        raise HTTPException(status_code=500, detail="Données de prière insuffisantes ou mal formées.")
+    title = lines[0].strip() if len(lines) > 0 else ""
+    basmala = lines[2].strip() if len(lines) > 2 else ""
 
-    prayers = ["fajr", "shuruk", "dohr", "asr", "maghreb", "isha"]
-    iqama_labels = ["fajr", "dohr", "asr", "maghreb", "isha"]
+    content_lines = lines[3:]
+    content = "\n".join(content_lines)
+    content = normalize_linebreaks(content)
 
-    # assignation correcte
-    today = dict(zip(prayers, raw_today))
-    tomorrow = dict(zip(prayers, raw_tomorrow))
+    truncation_keywords = [
+        "Retrouvez le hadith du jour",
+        "www.hadithdujour.com",
+        "officielhadithdujour@gmail.com",
+        "désinscription",
+        "Afficher l'intégralité",
+        "Message tronqué",
+    ]
+    for kw in truncation_keywords:
+        content = content.split(kw)[0]
 
+    arabic_pattern = re.compile(r'[\u0600-\u06FF]')
+    content_lines = content.split('\n')
+
+    arabic_start_index = None
+    for i, line in enumerate(content_lines):
+        if arabic_pattern.search(line):
+            arabic_start_index = i
+            break
+
+    if arabic_start_index is not None:
+        hadith_fr = "\n".join(content_lines[:arabic_start_index]).strip()
+        hadith_ar = "\n".join(content_lines[arabic_start_index:]).strip()
+    else:
+        hadith_fr = content.strip()
+        hadith_ar = ""
 
     return {
-        "today": {k: today[k] for k in iqama_labels},
-        "tomorrow": {k: tomorrow.get(k, "") for k in iqama_labels},
-        "shuruk": today.get("shuruk", ""),
-        "jumua": jumua,
+        "title": clean_text(title),
+        "basmala": clean_text(basmala),
+        "hadith_fr": clean_text(hadith_fr),
+        "hadith_ar": clean_text(hadith_ar)
     }
+
+def get_email_hadith():
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(EMAIL_USER, EMAIL_PASS)
+        mail.select("inbox")
+
+        status, messages = mail.search(None, "ALL")
+        email_ids = messages[0].split()
+        latest_email_id = email_ids[-1]
+
+        status, msg_data = mail.fetch(latest_email_id, "(RFC822)")
+        raw_email = msg_data[0][1]
+        msg = email.message_from_bytes(raw_email)
+
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    body = part.get_payload(decode=True).decode()
+                    break
+        else:
+            body = msg.get_payload(decode=True).decode()
+
+        return extract_parts(body)
+
+    except Exception as e:
+        return {
+            "title": "",
+            "basmala": "",
+            "hadith_fr": "",
+            "hadith_ar": "",
+            "email_error": str(e)
+        }
+
