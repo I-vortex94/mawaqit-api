@@ -4,17 +4,23 @@ from fastapi import HTTPException
 from config.redisClient import redisClient
 from redis.exceptions import RedisError
 from datetime import datetime, timedelta
-
 import json
 import re
 import models.models as models
+import imaplib
+import email
+import os
+from email.header import decode_header
 
 
-def fetch_mawaqit(masjid_id:str):
+EMAIL_USER = os.environ.get("EMAIL_USER")
+EMAIL_PASS = os.environ.get("EMAIL_PASS")
+
+
+def fetch_mawaqit(masjid_id: str):
     WEEK_IN_SECONDS = 604800
     retrieved_data = None
 
-    # Check if Redis client is initialized
     if redisClient is not None:
         try:
             retrieved_data = redisClient.get(masjid_id)
@@ -33,66 +39,64 @@ def fetch_mawaqit(masjid_id:str):
             if mawaqit:
                 conf_data_json = mawaqit.group(1)
                 conf_data = json.loads(conf_data_json)
-                # Store data in Redis if client is initialized
                 if redisClient is not None:
                     redisClient.set(masjid_id, json.dumps(conf_data), ex=WEEK_IN_SECONDS)
                 return conf_data
             else:
                 raise HTTPException(status_code=500, detail=f"Failed to extract confData JSON for {masjid_id}")
-        else:
-            print("Script containing confData not found.")
-            raise HTTPException(status_code=500, detail=f"Script containing confData not found for {masjid_id}")
-    if r.status_code == 404:
-        raise HTTPException(status_code=404, detail=f"{masjid_id} not found") 
+        raise HTTPException(status_code=500, detail=f"Script containing confData not found for {masjid_id}")
+    raise HTTPException(status_code=r.status_code, detail=f"{masjid_id} not found")
+
 
 def get_prayer_times_of_the_day(masjid_id):
     confData = fetch_mawaqit(masjid_id)
     times = confData["times"]
     sunset = confData["shuruq"]
-    prayer_time = models.PrayerTimes(fajr=times[0], sunset=sunset, dohr=times[1], asr=times[2], maghreb=times[3], icha=times[4])
-    prayer_dict = prayer_time.dict()
-    return prayer_dict
+    prayer_time = models.PrayerTimes(
+        fajr=times[0],
+        sunset=sunset,
+        dohr=times[1],
+        asr=times[2],
+        maghreb=times[3],
+        icha=times[4]
+    )
+    return prayer_time.dict()
+
 
 def get_calendar(masjid_id):
     confData = fetch_mawaqit(masjid_id)
     return confData["calendar"]
 
+
 def get_month(masjid_id, month_number):
     if month_number < 1 or month_number > 12:
-        raise HTTPException(status_code=400, detail=f"Month number should be between 1 and 12")
+        raise HTTPException(status_code=400, detail="Month number should be between 1 and 12")
     confData = fetch_mawaqit(masjid_id)
     month = confData["calendar"][month_number - 1]
-    prayer_times_list = [
-        models.PrayerTimes( 
-            fajr=prayer[0],
-            sunset=prayer[1],
-            dohr=prayer[2],
-            asr=prayer[3],
-            maghreb=prayer[4],
-            icha=prayer[5]
+    return [
+        models.PrayerTimes(
+            fajr=p[0],
+            sunset=p[1],
+            dohr=p[2],
+            asr=p[3],
+            maghreb=p[4],
+            icha=p[5]
         )
-        for prayer in month.values()
+        for p in month.values()
     ]
-    return prayer_times_list
 
-import imaplib
-import email
-import os
-import re
-from email.header import decode_header
-
-EMAIL_USER = os.environ.get("EMAIL_USER")
-EMAIL_PASS = os.environ.get("EMAIL_PASS")
 
 def normalize_linebreaks(text):
     text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
     text = re.sub(r' {2,}', ' ', text)
     return text
 
+
 def clean_text(text):
     text = text.replace('*', '')
     text = re.sub(r'(\n){1,5}$', '', text.strip(), flags=re.MULTILINE)
     return text
+
 
 def extract_parts(text):
     text = text.strip().replace('\r', '')
@@ -140,6 +144,7 @@ def extract_parts(text):
         "hadith_ar": clean_text(hadith_ar)
     }
 
+
 def get_email_hadith():
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
@@ -172,4 +177,3 @@ def get_email_hadith():
             "hadith_ar": "",
             "email_error": str(e)
         }
-
