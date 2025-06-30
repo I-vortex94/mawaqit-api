@@ -1,141 +1,76 @@
+import os
+import re
+import json
+import email
+import imaplib
 import requests
 from bs4 import BeautifulSoup
-from fastapi import HTTPException
-from config.redisClient import redisClient
-from redis.exceptions import RedisError
 from datetime import datetime, timedelta
-import json
-import re
+from fastapi import HTTPException
+from redis.exceptions import RedisError
+
+from config.redisClient import redisClient
 import models.models as models
-import imaplib
-import email
-import os
-from email.header import decode_header
 
-
-EMAIL_USER = os.environ.get("EMAIL_USER")
-EMAIL_PASS = os.environ.get("EMAIL_PASS")
-
-
+# === MAWAQIT UTIL ===
 def fetch_mawaqit(masjid_id: str):
     WEEK_IN_SECONDS = 604800
-    retrieved_data = None
-
-    if redisClient is not None:
+    if redisClient:
         try:
-            retrieved_data = redisClient.get(masjid_id)
+            cached = redisClient.get(masjid_id)
+            if cached:
+                return json.loads(cached)
         except RedisError:
-            print("Error when reading from cache")
-
-        if retrieved_data:
-            return json.loads(retrieved_data)
+            pass
 
     r = requests.get(f"https://mawaqit.net/fr/{masjid_id}")
     if r.status_code == 200:
         soup = BeautifulSoup(r.text, 'html.parser')
         script = soup.find('script', string=re.compile(r'var confData = (.*?);', re.DOTALL))
         if script:
-            mawaqit = re.search(r'var confData = (.*?);', script.string, re.DOTALL)
-            if mawaqit:
-                conf_data_json = mawaqit.group(1)
-                conf_data = json.loads(conf_data_json)
-                if redisClient is not None:
+            match = re.search(r'var confData = (.*?);', script.string, re.DOTALL)
+            if match:
+                conf_data = json.loads(match.group(1))
+                if redisClient:
                     redisClient.set(masjid_id, json.dumps(conf_data), ex=WEEK_IN_SECONDS)
                 return conf_data
-            else:
-                raise HTTPException(status_code=500, detail=f"Failed to extract confData JSON for {masjid_id}")
-        raise HTTPException(status_code=500, detail=f"Script containing confData not found for {masjid_id}")
-    raise HTTPException(status_code=r.status_code, detail=f"{masjid_id} not found")
+        raise HTTPException(status_code=500, detail=f"Données confData introuvables pour {masjid_id}")
+    raise HTTPException(status_code=r.status_code, detail=f"Erreur HTTP {r.status_code} pour {masjid_id}")
 
-
-def get_prayer_times_of_the_day(masjid_id):
-    confData = fetch_mawaqit(masjid_id)
-    times = confData["times"]
-    sunset = confData["shuruq"]
-    prayer_time = models.PrayerTimes(
-        fajr=times[0],
-        sunset=sunset,
-        dohr=times[1],
-        asr=times[2],
-        maghreb=times[3],
-        icha=times[4]
-    )
-    return prayer_time.dict()
-
-
-def get_calendar(masjid_id):
-    confData = fetch_mawaqit(masjid_id)
-    return confData["calendar"]
-
-
-def get_month(masjid_id, month_number):
-    if month_number < 1 or month_number > 12:
-        raise HTTPException(status_code=400, detail="Month number should be between 1 and 12")
-    confData = fetch_mawaqit(masjid_id)
-    month = confData["calendar"][month_number - 1]
-    return [
-        models.PrayerTimes(
-            fajr=p[0],
-            sunset=p[1],
-            dohr=p[2],
-            asr=p[3],
-            maghreb=p[4],
-            icha=p[5]
-        )
-        for p in month.values()
-    ]
-
+# === EMAIL UTIL ===
+EMAIL_USER = os.environ.get("EMAIL_USER")
+EMAIL_PASS = os.environ.get("EMAIL_PASS")
 
 def normalize_linebreaks(text):
     text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
     text = re.sub(r' {2,}', ' ', text)
     return text
 
-
 def clean_text(text):
     text = text.replace('*', '')
-    text = re.sub(r'(\n){1,5}$', '', text.strip(), flags=re.MULTILINE)
-    return text
-
+    return re.sub(r'(\n){1,5}$', '', text.strip(), flags=re.MULTILINE)
 
 def extract_parts(text):
-    text = text.strip().replace('\r', '')
-    lines = text.split('\n')
-    lines = [line for line in lines if not re.fullmatch(r'[*\s\-_=~#]+', line.strip())]
+    lines = [line for line in text.strip().replace('\r', '').split('\n')
+             if not re.fullmatch(r'[*\s\-_=~#]+', line.strip())]
 
-    title = lines[0].strip() if len(lines) > 0 else ""
+    title = lines[0].strip() if lines else ""
     basmala = lines[2].strip() if len(lines) > 2 else ""
-
     content_lines = lines[3:]
-    content = "\n".join(content_lines)
-    content = normalize_linebreaks(content)
+    content = normalize_linebreaks("\n".join(content_lines))
 
-    truncation_keywords = [
-        "Retrouvez le hadith du jour",
-        "www.hadithdujour.com",
-        "officielhadithdujour@gmail.com",
-        "désinscription",
-        "Afficher l'intégralité",
-        "Message tronqué",
-    ]
-    for kw in truncation_keywords:
+    for kw in ["Retrouvez", "www.hadithdujour.com", "gmail.com", "désinscription"]:
         content = content.split(kw)[0]
 
-    arabic_pattern = re.compile(r'[\u0600-\u06FF]')
-    content_lines = content.split('\n')
+    arabic_index = next((i for i, l in enumerate(content.split('\n'))
+                         if re.search(r'[\u0600-\u06FF]', l)), None)
 
-    arabic_start_index = None
-    for i, line in enumerate(content_lines):
-        if arabic_pattern.search(line):
-            arabic_start_index = i
-            break
-
-    if arabic_start_index is not None:
-        hadith_fr = "\n".join(content_lines[:arabic_start_index]).strip()
-        hadith_ar = "\n".join(content_lines[arabic_start_index:]).strip()
+    if arabic_index is not None:
+        lines = content.split('\n')
+        hadith_fr = "\n".join(lines[:arabic_index]).strip()
+        hadith_ar = "\n".join(lines[arabic_index:]).strip()
     else:
-        hadith_fr = content.strip()
-        hadith_ar = ""
+        hadith_fr, hadith_ar = content.strip(), ""
 
     return {
         "title": clean_text(title),
@@ -144,36 +79,58 @@ def extract_parts(text):
         "hadith_ar": clean_text(hadith_ar)
     }
 
-
 def get_email_hadith():
     try:
         mail = imaplib.IMAP4_SSL("imap.gmail.com")
         mail.login(EMAIL_USER, EMAIL_PASS)
         mail.select("inbox")
-
-        status, messages = mail.search(None, "ALL")
+        _, messages = mail.search(None, "ALL")
         email_ids = messages[0].split()
-        latest_email_id = email_ids[-1]
-
-        status, msg_data = mail.fetch(latest_email_id, "(RFC822)")
-        raw_email = msg_data[0][1]
-        msg = email.message_from_bytes(raw_email)
+        latest = email_ids[-1]
+        _, data = mail.fetch(latest, "(RFC822)")
+        raw = data[0][1]
+        msg = email.message_from_bytes(raw)
 
         if msg.is_multipart():
             for part in msg.walk():
                 if part.get_content_type() == "text/plain":
-                    body = part.get_payload(decode=True).decode()
+                    body = part.get_payload(decode=True).decode(errors="ignore")
                     break
         else:
-            body = msg.get_payload(decode=True).decode()
+            body = msg.get_payload(decode=True).decode(errors="ignore")
 
         return extract_parts(body)
 
-    except Exception as e:
-        return {
-            "title": "",
-            "basmala": "",
-            "hadith_fr": "",
-            "hadith_ar": "",
-            "email_error": str(e)
-        }
+    except Exception:
+        return {"title": "", "basmala": "", "hadith_fr": "", "hadith_ar": ""}
+
+def get_trmnl_data(masjid_id):
+    confData = fetch_mawaqit(masjid_id)
+    now = datetime.now()
+    today = str(now.day)
+    tomorrow = str((now + timedelta(days=1)).day)
+    month_index = now.month - 1
+
+    calendar = confData["calendar"][month_index]
+    raw_today = [h for h in calendar.get(today, []) if ":" in h]
+    raw_tomorrow = [h for h in calendar.get(tomorrow, []) if ":" in h]
+    shuruk = confData.get("shuruq", "")
+    jumua = confData.get("jumua", "")
+
+    prayers = ["fajr", "shuruk", "dohr", "asr", "maghreb", "isha"]
+    labels = ["fajr", "dohr", "asr", "maghreb", "isha"]
+    today_dict = dict(zip(prayers, raw_today))
+    tomorrow_dict = dict(zip(prayers, raw_tomorrow))
+
+    hadith = get_email_hadith()
+
+    return {
+        "today": {k: today_dict.get(k, "") for k in labels},
+        "tomorrow": {k: tomorrow_dict.get(k, "") for k in labels},
+        "shuruk": today_dict.get("shuruk", shuruk),
+        "jumua": jumua,
+        "basmala": hadith.get("basmala", ""),
+        "title": hadith.get("title", ""),
+        "hadith_fr": hadith.get("hadith_fr", ""),
+        "hadith_ar": hadith.get("hadith_ar", "")
+    }
