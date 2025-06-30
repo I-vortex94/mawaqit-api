@@ -1,136 +1,114 @@
-import os
-import re
-import json
-import email
-import imaplib
 import requests
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 from fastapi import HTTPException
-from redis.exceptions import RedisError
-
 from config.redisClient import redisClient
+from redis.exceptions import RedisError
+from datetime import datetime, timedelta
+
+import json
+import re
 import models.models as models
 
-# === MAWAQIT UTIL ===
-def fetch_mawaqit(masjid_id: str):
+
+def fetch_mawaqit(masjid_id:str):
     WEEK_IN_SECONDS = 604800
-    if redisClient:
+    retrieved_data = None
+
+    # Check if Redis client is initialized
+    if redisClient is not None:
         try:
-            cached = redisClient.get(masjid_id)
-            if cached:
-                return json.loads(cached)
+            retrieved_data = redisClient.get(masjid_id)
         except RedisError:
-            pass
+            print("Error when reading from cache")
+
+        if retrieved_data:
+            return json.loads(retrieved_data)
 
     r = requests.get(f"https://mawaqit.net/fr/{masjid_id}")
     if r.status_code == 200:
         soup = BeautifulSoup(r.text, 'html.parser')
         script = soup.find('script', string=re.compile(r'var confData = (.*?);', re.DOTALL))
         if script:
-            match = re.search(r'var confData = (.*?);', script.string, re.DOTALL)
-            if match:
-                conf_data = json.loads(match.group(1))
-                if redisClient:
+            mawaqit = re.search(r'var confData = (.*?);', script.string, re.DOTALL)
+            if mawaqit:
+                conf_data_json = mawaqit.group(1)
+                conf_data = json.loads(conf_data_json)
+                # Store data in Redis if client is initialized
+                if redisClient is not None:
                     redisClient.set(masjid_id, json.dumps(conf_data), ex=WEEK_IN_SECONDS)
                 return conf_data
-        raise HTTPException(status_code=500, detail=f"Données confData introuvables pour {masjid_id}")
-    raise HTTPException(status_code=r.status_code, detail=f"Erreur HTTP {r.status_code} pour {masjid_id}")
-
-# === EMAIL UTIL ===
-EMAIL_USER = os.environ.get("EMAIL_USER")
-EMAIL_PASS = os.environ.get("EMAIL_PASS")
-
-def normalize_linebreaks(text):
-    text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
-    text = re.sub(r' {2,}', ' ', text)
-    return text
-
-def clean_text(text):
-    text = text.replace('*', '')
-    return re.sub(r'(\n){1,5}$', '', text.strip(), flags=re.MULTILINE)
-
-def extract_parts(text):
-    lines = [line for line in text.strip().replace('\r', '').split('\n')
-             if not re.fullmatch(r'[*\s\-_=~#]+', line.strip())]
-
-    title = lines[0].strip() if lines else ""
-    basmala = lines[2].strip() if len(lines) > 2 else ""
-    content_lines = lines[3:]
-    content = normalize_linebreaks("\n".join(content_lines))
-
-    for kw in ["Retrouvez", "www.hadithdujour.com", "gmail.com", "désinscription"]:
-        content = content.split(kw)[0]
-
-    arabic_index = next((i for i, l in enumerate(content.split('\n'))
-                         if re.search(r'[\u0600-\u06FF]', l)), None)
-
-    if arabic_index is not None:
-        lines = content.split('\n')
-        hadith_fr = "\n".join(lines[:arabic_index]).strip()
-        hadith_ar = "\n".join(lines[arabic_index:]).strip()
-    else:
-        hadith_fr, hadith_ar = content.strip(), ""
-
-    return {
-        "title": clean_text(title),
-        "basmala": clean_text(basmala),
-        "hadith_fr": clean_text(hadith_fr),
-        "hadith_ar": clean_text(hadith_ar)
-    }
-
-def get_email_hadith():
-    try:
-        mail = imaplib.IMAP4_SSL("imap.gmail.com")
-        mail.login(EMAIL_USER, EMAIL_PASS)
-        mail.select("inbox")
-        _, messages = mail.search(None, "ALL")
-        email_ids = messages[0].split()
-        latest = email_ids[-1]
-        _, data = mail.fetch(latest, "(RFC822)")
-        raw = data[0][1]
-        msg = email.message_from_bytes(raw)
-
-        if msg.is_multipart():
-            for part in msg.walk():
-                if part.get_content_type() == "text/plain":
-                    body = part.get_payload(decode=True).decode(errors="ignore")
-                    break
+            else:
+                raise HTTPException(status_code=500, detail=f"Failed to extract confData JSON for {masjid_id}")
         else:
-            body = msg.get_payload(decode=True).decode(errors="ignore")
+            print("Script containing confData not found.")
+            raise HTTPException(status_code=500, detail=f"Script containing confData not found for {masjid_id}")
+    if r.status_code == 404:
+        raise HTTPException(status_code=404, detail=f"{masjid_id} not found") 
 
-        return extract_parts(body)
+def get_prayer_times_of_the_day(masjid_id):
+    confData = fetch_mawaqit(masjid_id)
+    times = confData["times"]
+    sunset = confData["shuruq"]
+    prayer_time = models.PrayerTimes(fajr=times[0], sunset=sunset, dohr=times[1], asr=times[2], maghreb=times[3], icha=times[4])
+    prayer_dict = prayer_time.dict()
+    return prayer_dict
 
-    except Exception:
-        return {"title": "", "basmala": "", "hadith_fr": "", "hadith_ar": ""}
+def get_calendar(masjid_id):
+    confData = fetch_mawaqit(masjid_id)
+    return confData["calendar"]
+
+def get_month(masjid_id, month_number):
+    if month_number < 1 or month_number > 12:
+        raise HTTPException(status_code=400, detail=f"Month number should be between 1 and 12")
+    confData = fetch_mawaqit(masjid_id)
+    month = confData["calendar"][month_number - 1]
+    prayer_times_list = [
+        models.PrayerTimes( 
+            fajr=prayer[0],
+            sunset=prayer[1],
+            dohr=prayer[2],
+            asr=prayer[3],
+            maghreb=prayer[4],
+            icha=prayer[5]
+        )
+        for prayer in month.values()
+    ]
+    return prayer_times_list
 
 def get_trmnl_data(masjid_id):
     confData = fetch_mawaqit(masjid_id)
+
     now = datetime.now()
-    today = str(now.day)
-    tomorrow = str((now + timedelta(days=1)).day)
+    today_day = str(now.day)
+    tomorrow_day = str((now + timedelta(days=1)).day)
     month_index = now.month - 1
 
     calendar = confData["calendar"][month_index]
-    raw_today = [h for h in calendar.get(today, []) if ":" in h]
-    raw_tomorrow = [h for h in calendar.get(tomorrow, []) if ":" in h]
+    iqama_times = confData["times"]
     shuruk = confData.get("shuruq", "")
     jumua = confData.get("jumua", "")
 
-    prayers = ["fajr", "shuruk", "dohr", "asr", "maghreb", "isha"]
-    labels = ["fajr", "dohr", "asr", "maghreb", "isha"]
-    today_dict = dict(zip(prayers, raw_today))
-    tomorrow_dict = dict(zip(prayers, raw_tomorrow))
+    # === utilitaire : nettoyer les listes ===
+    def clean(prayer_list):
+        return [h for h in prayer_list if ":" in h]
 
-    hadith = get_email_hadith()
+    raw_today = clean(calendar.get(today_day, []))
+    raw_tomorrow = clean(calendar.get(tomorrow_day, []))
+
+    if len(raw_today) < 6 or len(iqama_times) < 5:
+        raise HTTPException(status_code=500, detail="Données de prière insuffisantes ou mal formées.")
+
+    prayers = ["fajr", "shuruk", "dohr", "asr", "maghreb", "isha"]
+    iqama_labels = ["fajr", "dohr", "asr", "maghreb", "isha"]
+
+    # assignation correcte
+    today = dict(zip(prayers, raw_today))
+    tomorrow = dict(zip(prayers, raw_tomorrow))
+
 
     return {
-        "today": {k: today_dict.get(k, "") for k in labels},
-        "tomorrow": {k: tomorrow_dict.get(k, "") for k in labels},
-        "shuruk": today_dict.get("shuruk", shuruk),
+        "today": {k: today[k] for k in iqama_labels},
+        "tomorrow": {k: tomorrow.get(k, "") for k in iqama_labels},
+        "shuruk": today.get("shuruk", ""),
         "jumua": jumua,
-        "basmala": hadith.get("basmala", ""),
-        "title": hadith.get("title", ""),
-        "hadith_fr": hadith.get("hadith_fr", ""),
-        "hadith_ar": hadith.get("hadith_ar", "")
     }
