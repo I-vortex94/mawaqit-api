@@ -1,66 +1,33 @@
 from fastapi import APIRouter
 from fastapi.encoders import jsonable_encoder
-
 from typing import List
-
 import scraping.script as script
 import models.models as models
 
 router = APIRouter(prefix="/api/v1")
 
-@router.get("/", summary="Greetings",)
+@router.get("/")
 def read_root():
-    return {"Greetings": "Hello and Welcome to this Api, this api use the mawaqit.net as data source of prayers time in more than 8000 masjid, this api can be used to fetch data in json, you can find our docs on /docs. "}
+    return {
+        "Greetings": "This API uses mawaqit.net as a data source for prayer times. See /docs for usage."
+    }
 
-@router.get("/{masjid_id}/", status_code=200, summary="get the raw data from mawaqit website")
+@router.get("/{masjid_id}/")
 def get_raw_data(masjid_id: str):
-    r = script.fetch_mawaqit(masjid_id)
-    return {"rawdata": r}
+    return {"rawdata": script.fetch_mawaqit(masjid_id)}
 
-@router.get("/{masjid_id}/prayer-times", status_code=200, summary="get the prayer times of the current day", response_model=models.PrayerTimes)
+@router.get("/{masjid_id}/prayer-times", response_model=models.PrayerTimes)
 def get_prayer_times(masjid_id: str):
-    prayer_times = script.get_prayer_times_of_the_day(masjid_id)
-    return prayer_times
+    return script.get_prayer_times_of_the_day(masjid_id)
 
-
-@router.get("/{masjid_id}/calendar", status_code=200, summary="get the year calendar of the prayer times")
+@router.get("/{masjid_id}/calendar")
 def get_year_calendar(masjid_id: str):
-    r = script.get_calendar(masjid_id)
-    return {"calendar": r}
+    return {"calendar": script.get_calendar(masjid_id)}
 
-
-@router.get("/{masjid_id}/calendar/{month_number}", status_code=200, summary="get the month calendar of the prayer times", response_model=List[models.PrayerTimes])
+@router.get("/{masjid_id}/calendar/{month_number}", response_model=List[models.PrayerTimes])
 def get_month_calendar(masjid_id: str, month_number: int):
-    month_dict = script.get_month(masjid_id, month_number)
-    return jsonable_encoder(month_dict)
+    return jsonable_encoder(script.get_month(masjid_id, month_number))
 
-@router.get("/{masjid_id}/trmnl", summary="Formatted data for TRMNL")
+@router.get("/{masjid_id}/trmnl")
 def get_trmnl_format(masjid_id: str):
     return script.get_trmnl_data(masjid_id)
-def get_latest_email():
-    try:
-        mail = imaplib.IMAP4_SSL("imap.gmail.com")
-        mail.login(EMAIL_USER, EMAIL_PASS)
-        mail.select("inbox")
-    
-        status, messages = mail.search(None, "ALL")
-        email_ids = messages[0].split()
-        latest_email_id = email_ids[-1]
-
-        status, msg_data = mail.fetch(latest_email_id, "(RFC822)")
-        raw_email = msg_data[0][1]
-        msg = email.message_from_bytes(raw_email)
-
-        if msg.is_multipart():
-            for part in msg.walk():
-                if part.get_content_type() == "text/plain":
-                    body = part.get_payload(decode=True).decode()
-                    break
-        else:
-            body = msg.get_payload(decode=True).decode()
- 
-        result = script.extract_parts(body)
-        return script.jsonify(result)
-
-    except Exception as e:
-        return script.jsonify({"error": str(e)}), 500
