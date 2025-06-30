@@ -4,6 +4,12 @@ from fastapi import HTTPException
 from config.redisClient import redisClient
 from redis.exceptions import RedisError
 from datetime import datetime, timedelta
+from flask import Flask, jsonify
+import os
+import imaplib
+import email
+from email.header import decode_header
+import re
 
 import json
 import re
@@ -112,3 +118,72 @@ def get_trmnl_data(masjid_id):
         "shuruk": today.get("shuruk", ""),
         "jumua": jumua,
     }
+
+
+    app = Flask(__name__)
+
+    EMAIL_USER = os.environ.get("EMAIL_USER")
+    EMAIL_PASS = os.environ.get("EMAIL_PASS")
+
+    def normalize_linebreaks(text):
+        # Fusionne les sauts de ligne isolés (paragraphes artificiels)
+        text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
+        text = re.sub(r' {2,}', ' ', text)
+        return text
+
+    def clean_text(text):
+        # Supprimer les étoiles
+        text = text.replace('*', '')
+        # Supprimer les 5 derniers \n (retours à la ligne)
+        text = re.sub(r'(\n){1,5}$', '', text.strip(), flags=re.MULTILINE)
+        return text
+
+    def extract_parts(text):
+        text = text.strip().replace('\r', '')
+        lines = text.split('\n')
+    
+        # Supprime les lignes décoratives (ex : "**********")
+        lines = [line for line in lines if not re.fullmatch(r'[*\s\-_=~#]+', line.strip())]
+
+        title = lines[0].strip() if len(lines) > 0 else ""
+        basmala = lines[2].strip() if len(lines) > 2 else ""
+
+        content_lines = lines[3:]
+        content = "\n".join(content_lines)
+        content = normalize_linebreaks(content)
+
+        # Supprime tout ce qui vient après certaines expressions
+        truncation_keywords = [
+            "Retrouvez le hadith du jour",
+            "www.hadithdujour.com",
+            "officielhadithdujour@gmail.com",
+            "désinscription",
+            "Afficher l'intégralité",
+            "Message tronqué",
+        ]
+        for kw in truncation_keywords:
+            content = content.split(kw)[0]
+    
+        arabic_pattern = re.compile(r'[\u0600-\u06FF]')
+        content_lines = content.split('\n')
+    
+        arabic_start_index = None
+        for i, line in enumerate(content_lines):
+            if arabic_pattern.search(line):
+                arabic_start_index = i
+                break
+    
+        if arabic_start_index is not None:
+            hadith_fr = "\n".join(content_lines[:arabic_start_index]).strip()
+            hadith_ar = "\n".join(content_lines[arabic_start_index:]).strip()
+        else:
+            hadith_fr = content.strip()
+            hadith_ar = ""
+    
+        # Nettoyage final : astérisques et fins vides
+        return {
+            "title": clean_text(title),
+            "basmala": clean_text(basmala),
+            "hadith_fr": clean_text(hadith_fr),
+            "hadith_ar": clean_text(hadith_ar)
+        }
