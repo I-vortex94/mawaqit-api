@@ -1,11 +1,12 @@
+from fastapi import APIRouter, HTTPException
 from datetime import datetime, timedelta
-from fastapi import HTTPException
+import scraping.script as script
 
-from scraping.script import fetch_mawaqit, get_email_hadith  # 🔁 bien importer
+router = APIRouter(prefix="/api/v1")
 
 @router.get("/{masjid_id}/trmnl", summary="Formatted data for TRMNL")
-def get_trmnl_data(masjid_id):
-    confData = fetch_mawaqit(masjid_id)
+def get_trmnl_data(masjid_id: str):
+    confData = script.fetch_mawaqit(masjid_id)
 
     now = datetime.now()
     today_day = str(now.day)
@@ -13,7 +14,6 @@ def get_trmnl_data(masjid_id):
     month_index = now.month - 1
 
     calendar = confData["calendar"][month_index]
-    iqama_times = confData["times"]
     shuruk = confData.get("shuruq", "")
     jumua = confData.get("jumua", "")
 
@@ -23,7 +23,7 @@ def get_trmnl_data(masjid_id):
     raw_today = clean(calendar.get(today_day, []))
     raw_tomorrow = clean(calendar.get(tomorrow_day, []))
 
-    if len(raw_today) < 6 or len(iqama_times) < 5:
+    if len(raw_today) < 6:
         raise HTTPException(status_code=500, detail="Données de prière insuffisantes ou mal formées.")
 
     prayers = ["fajr", "shuruk", "dohr", "asr", "maghreb", "isha"]
@@ -32,12 +32,12 @@ def get_trmnl_data(masjid_id):
     today = dict(zip(prayers, raw_today))
     tomorrow = dict(zip(prayers, raw_tomorrow))
 
-    hadith = get_email_hadith()
+    hadith = script.get_email_hadith()
 
     return {
-        "today": {k: today[k] for k in iqama_labels},
+        "today": {k: today.get(k, "") for k in iqama_labels},
         "tomorrow": {k: tomorrow.get(k, "") for k in iqama_labels},
-        "shuruk": today.get("shuruk", ""),
+        "shuruk": today.get("shuruk", shuruk),
         "jumua": jumua,
         "basmala": hadith.get("basmala", ""),
         "title": hadith.get("title", ""),
