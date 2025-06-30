@@ -37,3 +37,30 @@ def get_month_calendar(masjid_id: str, month_number: int):
 @router.get("/{masjid_id}/trmnl", summary="Formatted data for TRMNL")
 def get_trmnl_format(masjid_id: str):
     return script.get_trmnl_data(masjid_id)
+def get_latest_email():
+    try:
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(EMAIL_USER, EMAIL_PASS)
+        mail.select("inbox")
+    
+        status, messages = mail.search(None, "ALL")
+        email_ids = messages[0].split()
+        latest_email_id = email_ids[-1]
+
+        status, msg_data = mail.fetch(latest_email_id, "(RFC822)")
+        raw_email = msg_data[0][1]
+        msg = email.message_from_bytes(raw_email)
+
+        if msg.is_multipart():
+            for part in msg.walk():
+                if part.get_content_type() == "text/plain":
+                    body = part.get_payload(decode=True).decode()
+                    break
+        else:
+            body = msg.get_payload(decode=True).decode()
+ 
+        result = script.extract_parts(body)
+        return script.jsonify(result)
+
+    except Exception as e:
+        return script.jsonify({"error": str(e)}), 500
