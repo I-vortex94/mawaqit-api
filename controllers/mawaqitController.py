@@ -5,7 +5,6 @@ from typing import List
 
 import scraping.script as script
 import models.models as models
-import email_utils
 
 router = APIRouter(prefix="/api/v1")
 
@@ -37,9 +36,4 @@ def get_month_calendar(masjid_id: str, month_number: int):
 
 @router.get("/{masjid_id}/trmnl", summary="Formatted data for TRMNL")
 def get_trmnl_format(masjid_id: str):
-    mawaqit_data = script.get_trmnl_data(masjid_id)
-    email_data = email_utils.get_latest_email_parts()
-    return {
-        "mawaqit": mawaqit_data,
-        "hadith_email": email_data
-    }
+    return script.get_trmnl_data(masjid_id)
