@@ -9,8 +9,7 @@ import json
 import re
 import models.models as models
 
-
-def fetch_mawaqit(masjid_id:str):
+def fetch_mawaqit(masjid_id: str):
     WEEK_IN_SECONDS = 604800
     retrieved_data = None
 
@@ -43,7 +42,12 @@ def fetch_mawaqit(masjid_id:str):
             print("Script containing confData not found.")
             raise HTTPException(status_code=500, detail=f"Script containing confData not found for {masjid_id}")
     if r.status_code == 404:
-        raise HTTPException(status_code=404, detail=f"{masjid_id} not found") 
+        raise HTTPException(status_code=404, detail=f"{masjid_id} not found")
+
+
+# Ajout : Heure actuelle (HH:MM)
+time = datetime.now().strftime("%H:%M")
+
 
 def get_prayer_times_of_the_day(masjid_id):
     confData = fetch_mawaqit(masjid_id)
