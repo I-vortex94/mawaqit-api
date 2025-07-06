@@ -6,6 +6,8 @@ from typing import List
 import scraping.script as script
 import models.models as models
 
+from datetime import datetime
+
 router = APIRouter(prefix="/api/v1")
 
 @router.get("/", summary="Greetings",)
@@ -15,7 +17,11 @@ def read_root():
 @router.get("/{masjid_id}/", status_code=200, summary="get the raw data from mawaqit website")
 def get_raw_data(masjid_id: str):
     r = script.fetch_mawaqit(masjid_id)
-    return {"rawdata": r}
+    current_time = datetime.now().strftime("%H:%M")
+    return {
+        "rawdata": r,
+        "time": current_time
+    }
 
 @router.get("/{masjid_id}/prayer-times", status_code=200, summary="get the prayer times of the current day", response_model=models.PrayerTimes)
 def get_prayer_times(masjid_id: str):
