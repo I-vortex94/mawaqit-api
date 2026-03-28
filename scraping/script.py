@@ -9,11 +9,12 @@ import json
 import re
 import models.models as models
 
+
 def fetch_mawaqit(masjid_id: str):
     WEEK_IN_SECONDS = 604800
     retrieved_data = None
 
-    # Check if Redis client is initialized
+    # 🔁 Cache Redis
     if redisClient is not None:
         try:
             retrieved_data = redisClient.get(masjid_id)
@@ -23,61 +24,95 @@ def fetch_mawaqit(masjid_id: str):
         if retrieved_data:
             return json.loads(retrieved_data)
 
-    r = requests.get(f"https://mawaqit.net/fr/{masjid_id}")
+    url = f"https://mawaqit.net/fr/{masjid_id}"
+    r = requests.get(url)
+
     if r.status_code == 200:
         soup = BeautifulSoup(r.text, 'html.parser')
-        script = soup.find('script', string=re.compile(r'var confData = (.*?);', re.DOTALL))
-        if script:
-            mawaqit = re.search(r'var confData = (.*?);', script.string, re.DOTALL)
-            if mawaqit:
-                conf_data_json = mawaqit.group(1)
-                conf_data = json.loads(conf_data_json)
-                # Store data in Redis if client is initialized
-                if redisClient is not None:
-                    redisClient.set(masjid_id, json.dumps(conf_data), ex=WEEK_IN_SECONDS)
-                return conf_data
-            else:
-                raise HTTPException(status_code=500, detail=f"Failed to extract confData JSON for {masjid_id}")
-        else:
-            print("Script containing confData not found.")
-            raise HTTPException(status_code=500, detail=f"Script containing confData not found for {masjid_id}")
-    if r.status_code == 404:
+
+        # 🔥 FIX IMPORTANT
+        searchString = r'(?:var|let)\s+confData\s*=\s*(.*?);'
+        script_tag = soup.find('script', string=re.compile(searchString, re.DOTALL))
+
+        if not script_tag:
+            raise HTTPException(status_code=500, detail="confData script not found")
+
+        match = re.search(searchString, script_tag.string, re.DOTALL)
+
+        if not match:
+            raise HTTPException(status_code=500, detail="confData not extracted")
+
+        conf_data = json.loads(match.group(1))
+
+        if redisClient is not None:
+            try:
+                redisClient.set(masjid_id, json.dumps(conf_data), ex=WEEK_IN_SECONDS)
+            except RedisError:
+                print("Redis write error")
+
+        return conf_data
+
+    elif r.status_code == 404:
         raise HTTPException(status_code=404, detail=f"{masjid_id} not found")
 
+    else:
+        raise HTTPException(status_code=502, detail="Mawaqit request failed")
 
-# Ajout : Heure actuelle (HH:MM)
-time = datetime.now().strftime("%H:%M")
 
-
+# ✅ PRAYER TIMES SAFE
 def get_prayer_times_of_the_day(masjid_id):
     confData = fetch_mawaqit(masjid_id)
-    times = confData["times"]
-    sunset = confData["shuruq"]
-    prayer_time = models.PrayerTimes(fajr=times[0], sunset=sunset, dohr=times[1], asr=times[2], maghreb=times[3], icha=times[4])
-    prayer_dict = prayer_time.dict()
-    return prayer_dict
+
+    if not confData:
+        raise HTTPException(status_code=500, detail="No data")
+
+    times = confData.get("times", [])
+    shuruq = confData.get("shuruq")
+
+    if len(times) < 5:
+        raise HTTPException(status_code=500, detail="Invalid prayer data")
+
+    prayer_time = models.PrayerTimes(
+        fajr=times[0],
+        sunrise=shuruq,
+        dohr=times[1],
+        asr=times[2],
+        maghreb=times[3],
+        icha=times[4]
+    )
+
+    return prayer_time.dict()
+
 
 def get_calendar(masjid_id):
     confData = fetch_mawaqit(masjid_id)
-    return confData["calendar"]
+    return confData.get("calendar", [])
+
 
 def get_month(masjid_id, month_number):
     if month_number < 1 or month_number > 12:
-        raise HTTPException(status_code=400, detail=f"Month number should be between 1 and 12")
+        raise HTTPException(status_code=400, detail="Month must be between 1 and 12")
+
     confData = fetch_mawaqit(masjid_id)
-    month = confData["calendar"][month_number - 1]
-    prayer_times_list = [
-        models.PrayerTimes( 
-            fajr=prayer[0],
-            sunset=prayer[1],
-            dohr=prayer[2],
-            asr=prayer[3],
-            maghreb=prayer[4],
-            icha=prayer[5]
+    calendar = confData.get("calendar", [])
+
+    if not calendar:
+        raise HTTPException(status_code=500, detail="Calendar missing")
+
+    month = calendar[month_number - 1]
+
+    return [
+        models.PrayerTimes(
+            fajr=p[0],
+            sunrise=p[1],
+            dohr=p[2],
+            asr=p[3],
+            maghreb=p[4],
+            icha=p[5]
         )
-        for prayer in month.values()
+        for p in month.values()
     ]
-    return prayer_times_list
+
 
 def get_trmnl_data(masjid_id):
     confData = fetch_mawaqit(masjid_id)
@@ -87,31 +122,32 @@ def get_trmnl_data(masjid_id):
     tomorrow_day = str((now + timedelta(days=1)).day)
     month_index = now.month - 1
 
-    calendar = confData["calendar"][month_index]
-    iqama_times = confData["times"]
-    shuruk = confData.get("shuruq", "")
+    calendar = confData.get("calendar", [])
+    iqama_times = confData.get("times", [])
     jumua = confData.get("jumua", "")
 
-    # === utilitaire : nettoyer les listes ===
-    def clean(prayer_list):
-        return [h for h in prayer_list if ":" in h]
+    if not calendar:
+        raise HTTPException(status_code=500, detail="Calendar missing")
+
+    calendar = calendar[month_index]
+
+    def clean(lst):
+        return [h for h in lst if ":" in h]
 
     raw_today = clean(calendar.get(today_day, []))
     raw_tomorrow = clean(calendar.get(tomorrow_day, []))
 
     if len(raw_today) < 6 or len(iqama_times) < 5:
-        raise HTTPException(status_code=500, detail="Données de prière insuffisantes ou mal formées.")
+        raise HTTPException(status_code=500, detail="Invalid prayer data")
 
     prayers = ["fajr", "shuruk", "dohr", "asr", "maghreb", "isha"]
     iqama_labels = ["fajr", "dohr", "asr", "maghreb", "isha"]
 
-    # assignation correcte
     today = dict(zip(prayers, raw_today))
     tomorrow = dict(zip(prayers, raw_tomorrow))
 
-
     return {
-        "today": {k: today[k] for k in iqama_labels},
+        "today": {k: today.get(k, "") for k in iqama_labels},
         "tomorrow": {k: tomorrow.get(k, "") for k in iqama_labels},
         "shuruk": today.get("shuruk", ""),
         "jumua": jumua,
